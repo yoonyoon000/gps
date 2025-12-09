@@ -4,7 +4,7 @@ const ctx = canvas.getContext("2d");
 
 let width, height;
 
-// 지나간 점들: { x, y, dwell }
+// GPS에서 받아온 "세계 좌표" 점들: { x, y, dwell }
 let points = [];
 
 // GPS 기준점
@@ -12,29 +12,28 @@ let originLat = null;
 let originLon = null;
 let hasOrigin = false;
 
-// 화면 중앙 기준
+// 화면 중앙
 let centerX = 0;
 let centerY = 0;
 
-// 스무딩용 좌표
+// 스무딩용 위치
 let smoothedX = null;
 let smoothedY = null;
 
 // 시간 관리
 let lastUpdateTime = performance.now();
 
-// 성능 & 스무딩 상수들
+// ===== 성능 & 스무딩 상수 =====
 const R = 6371000;            // 지구 반지름 (m)
-const PIXELS_PER_METER = 1.2; // 한 번 더 축소 (너무 퍼지지 않게)
-const MIN_PIXEL_DIST = 14;    // 이 픽셀 이상 움직여야 점 추가
-const MAX_STEP_PX = 130;      // 이 픽셀 이상 갑자기 튀면 GPS 잡음으로 보고 무시
+const PIXELS_PER_METER = 1.1; // 1m당 px (너무 퍼지지 않게)
+const MIN_PIXEL_DIST = 16;    // 이 픽셀 이상 움직였을 때만 점 추가
+const MAX_STEP_PX = 120;      // 이 이상 갑자기 튀면 GPS 잡음으로 보고 무시
 
-const MAX_POINTS = 400;       // 최대 점 개수
-const MAX_LINE_SEGMENTS = 320;
-const MAX_MARKERS = 120;
+const MAX_POINTS = 260;       // 최대 점 개수 (오래된 건 버림)
+const MAX_LINE_SEGMENTS = 220;
+const MAX_MARKERS = 80;
 
-// 스무딩 계수 (0 ~ 1, 클수록 더 빨리 따라감 / 작을수록 더 부드러움)
-const SMOOTH_ALPHA = 0.22;
+const SMOOTH_ALPHA = 0.25;    // GPS 스무딩 정도 (0~1, 클수록 덜 부드러움)
 
 function resize() {
     width = window.innerWidth;
@@ -63,9 +62,10 @@ function latLonToXY(lat, lon) {
     const dLat = ((lat - originLat) * Math.PI) / 180;
     const dLon = ((lon - originLon) * Math.PI) / 180;
 
-    const dyMeters = dLat * R;                           // 위아래
-    const dxMeters = dLon * R * Math.cos(originLatRad);  // 좌우
+    const dyMeters = dLat * R;                           // 위/아래
+    const dxMeters = dLon * R * Math.cos(originLatRad);  // 좌/우
 
+    // 일단 "세계 좌표계" 상 위치
     const x = centerX + dxMeters * PIXELS_PER_METER;
     const y = centerY - dyMeters * PIXELS_PER_METER;
 
@@ -75,12 +75,12 @@ function latLonToXY(lat, lon) {
 
 // ===================== 감정 기반 파스텔 색 =====================
 function getEmotionColor(dwellSec) {
-    const maxD = 60;
+    const maxD = 60;                 // 60초 기준으로 감정 포화
     const d = Math.min(dwellSec, maxD);
-    const t = d / maxD; // 0 ~ 1
+    const t = d / maxD;              // 0 ~ 1
 
     if (t < 0.33) {
-        // 안정 (Calm) - 민트/블루
+        // 안정 (Calm) - 민트/블루 계열
         const tt = t / 0.33;
         const hue = 170 + (190 - 170) * tt;
         const sat = 30 + (45 - 30) * tt;
@@ -105,20 +105,18 @@ function getEmotionColor(dwellSec) {
 
 
 // ===================== 헥사곤 마커 =====================
-function drawHexMarker(p) {
-    const color = getEmotionColor(p.dwell);
+function drawHexMarkerLocal(px, py, dwell) {
+    const color = getEmotionColor(dwell);
     const maxD = 60;
-    const d = Math.min(p.dwell, maxD);
+    const d = Math.min(dwell, maxD);
 
     const baseR = 6;
     const r = baseR + (d / maxD) * 24;
 
     ctx.save();
-    ctx.translate(p.x, p.y);
+    ctx.translate(px, py);
 
     ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 6;
 
     const sides = 6;
     ctx.beginPath();
@@ -134,7 +132,7 @@ function drawHexMarker(p) {
 
     ctx.strokeStyle = color;
     ctx.globalAlpha = 0.4;
-    ctx.lineWidth = 1.3;
+    ctx.lineWidth = 1.2;
     const outerR = r + 4;
     ctx.beginPath();
     for (let i = 0; i < sides; i++) {
@@ -167,7 +165,7 @@ function startGPS() {
 
             const raw = latLonToXY(lat, lon);
 
-            // 스무딩: 이전 값과 섞어서 부드럽게
+            // 스무딩 적용
             if (smoothedX == null || smoothedY == null) {
                 smoothedX = raw.x;
                 smoothedY = raw.y;
@@ -189,7 +187,7 @@ function startGPS() {
             const dy = y - last.y;
             const distPx = Math.hypot(dx, dy);
 
-            // 너무 멀리 확 튈 때는 GPS 잡음으로 보고 무시
+            // 갑자기 멀리 튀면 무시 (GPS 잡음)
             if (distPx > MAX_STEP_PX) {
                 return;
             }
@@ -198,7 +196,7 @@ function startGPS() {
             if (distPx >= MIN_PIXEL_DIST) {
                 points.push({ x, y, dwell: 0 });
 
-                // 최대 개수 넘으면 오래된 점 버리기
+                // 너무 많이 쌓이면 오래된 점 제거
                 if (points.length > MAX_POINTS) {
                     const overflow = points.length - MAX_POINTS;
                     points.splice(0, overflow);
@@ -220,13 +218,13 @@ function startGPS() {
 startGPS();
 
 
-// ===================== 메인 루프: 시간 + 그리기 =====================
+// ===================== 메인 루프: 시간 + 회전 렌더링 =====================
 function updateAndRender() {
     const now = performance.now();
     const dt = (now - lastUpdateTime) / 1000;
     lastUpdateTime = now;
 
-    // 마지막 점 dwell 누적 (색 변화 느리게)
+    // 마지막 점 dwell 누적 (색 변화 아주 천천히)
     if (points.length > 0) {
         points[points.length - 1].dwell += dt * 0.4;
     }
@@ -247,88 +245,95 @@ function updateAndRender() {
     ctx.fillRect(0, 0, width, height);
 
     const total = points.length;
+    if (total === 0) {
+        requestAnimationFrame(updateAndRender);
+        return;
+    }
+
+    const last = points[total - 1];
+    // 방향 벡터 (마지막 두 점 기준)
+    let angle = -Math.PI / 2; // 기본은 위쪽
+    if (total >= 2) {
+        const prev = points[total - 2];
+        const dx = last.x - prev.x;
+        const dy = last.y - prev.y;
+        if (Math.hypot(dx, dy) > 0.001) {
+            const theta = Math.atan2(dy, dx);
+            // theta: 0 = 오른쪽, pi/2 = 아래, -pi/2 = 위
+            // 우리는 "이동 방향이 화면 위쪽(−π/2)"이 되도록 회전
+            angle = -Math.PI / 2 - theta;
+        }
+    }
+
+    // === 여기부터 회전 좌표계 (플레이어가 항상 위쪽을 향하도록 회전) ===
+    ctx.save();
+    ctx.translate(width / 2, height / 2); // 화면 중앙을 원점으로
+    ctx.rotate(angle);                    // 전체 지도 회전
+    // 이 상태에서 last 지점이 (0,0)이 되도록 좌표 보정해서 그림
+
     const startIndex = Math.max(1, total - MAX_LINE_SEGMENTS);
 
-    // 길(선) 그리기 — 오래된 건 투명, 최근일수록 진하게
+    // 길(선) 그리기 – 오래된 건 투명, 최근일수록 진하게
     for (let i = startIndex; i < total; i++) {
         const p1 = points[i - 1];
         const p2 = points[i];
+
         const dwell = Math.max(p1.dwell, p2.dwell);
         const color = getEmotionColor(dwell);
 
-        const t = (i - startIndex) / (total - startIndex || 1); // 0~1
-        const alpha = 0.2 + 0.8 * t; // 오래된 건 0.2, 최근은 1.0 근처
+        const t = (i - startIndex) / (total - startIndex || 1);
+        const alpha = 0.18 + 0.82 * t;
+
+        const x1 = p1.x - last.x;
+        const y1 = p1.y - last.y;
+        const x2 = p2.x - last.x;
+        const y2 = p2.y - last.y;
 
         ctx.save();
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 4;
         ctx.globalAlpha = alpha;
+        ctx.lineWidth = 3;
 
         ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
         ctx.stroke();
         ctx.restore();
     }
 
-    // 헥사 마커 — 최근 일부만
+    // 헥사 마커 – 최근 일부만
     const markerStart = Math.max(0, total - MAX_MARKERS);
     for (let i = markerStart; i < total; i++) {
-        drawHexMarker(points[i]);
+        const p = points[i];
+        const localX = p.x - last.x;
+        const localY = p.y - last.y;
+        drawHexMarkerLocal(localX, localY, p.dwell);
     }
 
-    // 현재 위치 & 바라보는 방향 표시
-    const last = points[points.length - 1];
-    if (last) {
-        ctx.save();
+    // 플레이어 (현재 위치) – 항상 위쪽 보고 있는 느낌
+    ctx.save();
+    // 현재 위치는 회전 좌표계에서 (0,0)
+    // 헤드 삼각형: 항상 위쪽을 향하도록 그리기
+    const headLen = 24;
+    const wing = 8;
 
-        // 방향 벡터 계산 (마지막 두 점 기준)
-        let dirX = 0;
-        let dirY = -1; // 기본 위쪽
-        if (points.length >= 2) {
-            const prev = points[points.length - 2];
-            const dx = last.x - prev.x;
-            const dy = last.y - prev.y;
-            const len = Math.hypot(dx, dy);
-            if (len > 0.001) {
-                dirX = dx / len;
-                dirY = dy / len;
-            }
-        }
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(0, -headLen);        // 위쪽
+    ctx.lineTo(-wing, 4);
+    ctx.lineTo(wing, 4);
+    ctx.closePath();
+    ctx.fill();
 
-        // 방향 화살표 (삼각형)
-        const arrowLen = 26;
-        const tipX = last.x + dirX * arrowLen;
-        const tipY = last.y + dirY * arrowLen;
-        const perpX = -dirY;
-        const perpY = dirX;
-        const wing = 8;
+    // 현재 위치 링
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
 
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.beginPath();
-        ctx.moveTo(tipX, tipY);
-        ctx.lineTo(
-            last.x + perpX * wing,
-            last.y + perpY * wing
-        );
-        ctx.lineTo(
-            last.x - perpX * wing,
-            last.y - perpY * wing
-        );
-        ctx.closePath();
-        ctx.fill();
-
-        // 현재 위치 링
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(last.x, last.y, 16, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.restore();
-    }
+    ctx.restore(); // 회전 좌표계 끝
 
     requestAnimationFrame(updateAndRender);
 }
