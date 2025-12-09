@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>감정 지도 – 베이스 테스트</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div class="bottom-hint">
+        ← ↑ ↓ → 로 움직이면, 머문 시간에 따라 길의 색이 물들어가요
+    </div>
+
+
+    <div id="emotion-popup">
+        <button class="emotion-btn" data-emotion="hope">희망</button>
+        <button class="emotion-btn" data-emotion="tense">긴장</button>
+        <button class="emotion-btn" data-emotion="anger">분노</button>
+        <button class="emotion-btn" data-emotion="sad">슬픔</button>
+        <button class="emotion-btn" data-emotion="calm">안정</button>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
